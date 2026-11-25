@@ -45,24 +45,21 @@ window.DDRScore = async () => {
   ];
   const rankOf = (n) => RANKS.find((r) => n >= r[0]);
 
-  // ランク文字のグラデーション
-  const RANK_GRADIENT = {
-    AAA: 'linear-gradient(#fffbe6,#ffe066 45%,#d9a21b 55%,#fff0a0)',
-    AA: 'linear-gradient(#fff6c0,#f5c518 45%,#c98a0a 55%,#ffe27a)',
-    A: 'linear-gradient(#ffffc0,#ffe600 45%,#e0b800 55%,#fff27a)',
-    B: 'linear-gradient(#e6f6ff,#4db8ff 45%,#1a6fe0 55%,#7fd0ff)',
-    C: 'linear-gradient(#ffe6f6,#ff6ec7 45%,#d0359f 55%,#ff9ad8)',
-    D: 'linear-gradient(#f2f2f2,#aaa 45%,#777 55%,#ccc)',
+  // ランク文字の色 (単色。html2canvas の「画像で保存」でも崩れない)
+  const RANK_COLOR = {
+    AAA: '#ffe680', // 明るい金
+    AA: '#f5c518', // 濃い金
+    A: '#fff04d', // 黄
+    B: '#4db8ff', // 青
+    C: '#ff6ec7', // ピンク
+    D: '#b8b8b8', // 灰
   };
 
-  // ランク文字の黒い縁取り
+  // ランク文字の黒い縁取り (text-shadow なら html2canvas でも描画できる)
   const RANK_OUTLINE = [
-    'drop-shadow(1px 0 0 #000)',
-    'drop-shadow(-1px 0 0 #000)',
-    'drop-shadow(0 1px 0 #000)',
-    'drop-shadow(0 -1px 0 #000)',
-    'drop-shadow(0 0 4px rgba(0,0,0,.8))',
-  ].join(' ');
+    '1px 0 0 #000', '-1px 0 0 #000', '0 1px 0 #000', '0 -1px 0 #000',
+    '1px 1px 0 #000', '-1px -1px 0 #000', '1px -1px 0 #000', '-1px 1px 0 #000',
+  ].join(',');
 
   // ------------------------------------------------------------
   // 前回の表示を片付ける
@@ -236,9 +233,15 @@ window.DDRScore = async () => {
         });
         if (!response.ok) throw Error('HTTP ' + response.status);
 
-        const url = URL.createObjectURL(await response.blob());
-        window.__ddrScoreObjectUrls.push(url);
-        img.src = url;
+        // Blob URL だと「画像で保存」(html2canvas)が読めないため、data URL にする
+        const blob = await response.blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(blob);
+        });
+        img.src = dataUrl;
         await img.decode();
         fixed++;
       } catch (e) {
@@ -379,10 +382,8 @@ window.DDRScore = async () => {
           'font-size:' + RANK_FONT_SIZE + 'px',
           'font-weight:900', 'font-style:italic', 'line-height:1.1',
           'letter-spacing:-1px', 'white-space:nowrap',
-          'color:transparent',
-          'background:' + RANK_GRADIENT[letter],
-          '-webkit-background-clip:text', 'background-clip:text',
-          'filter:' + RANK_OUTLINE,
+          'color:' + RANK_COLOR[letter] + '!important',
+          'text-shadow:' + RANK_OUTLINE,
           'z-index:11', 'pointer-events:none',
         ].join(';');
 
