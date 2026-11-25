@@ -15,7 +15,9 @@ window.DDRScore = async () => {
   const SCORE_FONT_SIZE = 19; // スコア文字サイズ(px)
   const MIN_FONT_SIZE = 11; // 自動縮小の下限(px)
   const RANK_FONT_SIZE = 21; // ランク文字サイズ(px)
-  const IMAGE_CONCURRENCY = 6; // ジャケット画像の同時確認数
+  const IMAGE_WAIT_MS = 120000; // 読み込み中のジャケットを待つ上限(ミリ秒)
+  const RETRY_CONCURRENCY = 3; // 読み込みに失敗した画像の再取得の同時数
+  const RETRY_WAITS = [1000, 3000, 8000]; // 再取得の間隔(最大3回やり直す)
   const SCORE_TIMEOUT_MS = 30000; // スコア取得のタイムアウト
 
   // スコアの数字の色 (ランクとは別の4段階)
@@ -137,7 +139,6 @@ window.DDRScore = async () => {
 
     // 前回追加した要素を消す
     document.querySelectorAll('.my-ddr-score').forEach((e) => e.remove());
-    window.__ddrScoreObjectUrls = window.__ddrScoreObjectUrls || [];
 
     const images = [...document.querySelectorAll('.div-jacket img.img-jacket')];
 
@@ -147,11 +148,22 @@ window.DDRScore = async () => {
     let imgDone = 0;
     let fixed = 0;
 
+    let drawn = null; // スコア描画後に入る要約文
+
     const render = () => {
       if (stopped) return;
       const imgFrac = images.length ? imgDone / images.length : 1;
+      if (drawn) {
+        show(
+          drawn + '\n② ジャケット読み込み: ' + imgDone + '/' + images.length +
+            '\n※「画像で保存」は読み込み完了後に押してください',
+          '#4da3ff',
+          imgFrac
+        );
+        return;
+      }
       show(
-        '① スコア取得: ' + scoreMsg + '\n② ジャケット確認: ' + imgDone + '/' + images.length,
+        '① スコア取得: ' + scoreMsg + '\n② ジャケット読み込み: ' + imgDone + '/' + images.length,
         '#4da3ff',
         scoreFrac * 0.5 + imgFrac * 0.5
       );
@@ -200,73 +212,125 @@ window.DDRScore = async () => {
         }, 250);
       });
 
-    // --- ジャケット画像: 壊れているものだけ再取得する ---
+    // --- ジャケット画像 ---
+    // 読み込み中の画像は、そのまま待つ(再取得すると、遅いサーバーへの負荷が増えるため)。
+    // 読み込みに失敗した(error になった)画像だけ、間隔を空けて fetch し直す。
+    const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    const waitForImage = (img) =>
+      new Promise((resolve) => {
+        if (img.complete) {
+          resolve();
+          return;
+        }
+        const done = () => {
+          clearTimeout(timer);
+          img.removeEventListener('load', done);
+          img.removeEventListener('error', done);
+          resolve();
+        };
+        const timer = setTimeout(done, IMAGE_WAIT_MS);
+        img.addEventListener('load', done);
+        img.addEventListener('error', done);
+      });
+
+    // 再取得の同時数を制限する
+    let activeRetries = 0;
+    const waiters = [];
+    const withRetrySlot = async (fn) => {
+      while (activeRetries >= RETRY_CONCURRENCY) {
+        await new Promise((resolve) => waiters.push(resolve));
+      }
+      activeRetries++;
+      try {
+        return await fn();
+      } finally {
+        activeRetries--;
+        const next = waiters.shift();
+        if (next) next();
+      }
+    };
+
+    // Blob URL だと「画像で保存」(html2canvas)が読めないため、data URL にする
+    const fetchAsDataUrl = async (url) => {
+      const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      if (!response.ok) throw Error('HTTP ' + response.status);
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(blob);
+      });
+    };
+
+    let failed = 0;
+
     const checkImage = async (img) => {
       try {
         if (stopped) return;
 
-        // 読み込み中なら最大3秒待つ
-        if (!img.complete) {
-          await new Promise((resolve) => {
-            const timer = setTimeout(resolve, 3000);
-            const done = () => {
-              clearTimeout(timer);
-              resolve();
-            };
-            img.addEventListener('load', done, { once: true });
-            img.addEventListener('error', done, { once: true });
-          });
-        }
+        await waitForImage(img);
         if (stopped) return;
 
-        // 正常に表示できていれば何もしない
+        // 正常に読み込めていれば何もしない
         if (img.complete && img.naturalWidth > 0) return;
 
-        // 壊れている場合は fetch し直して Blob URL を差し替える
+        // 待っても読み込み中のまま(時間切れ)
+        if (!img.complete) {
+          failed++;
+          console.warn('ジャケット読み込み時間切れ:', img.src);
+          return;
+        }
+
+        // 読み込みに失敗している: 間隔を空けて取得し直す
         const original = img.dataset.ddrOriginalSrc || img.getAttribute('src');
-        if (!original) return;
+        if (!original) {
+          failed++;
+          return;
+        }
         img.dataset.ddrOriginalSrc = original;
+        const url = new URL(original, location.href).href;
 
-        const response = await fetch(new URL(original, location.href).href, {
-          credentials: 'same-origin',
-          cache: 'no-store',
-        });
-        if (!response.ok) throw Error('HTTP ' + response.status);
-
-        // Blob URL だと「画像で保存」(html2canvas)が読めないため、data URL にする
-        const blob = await response.blob();
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => reject(reader.error);
-          reader.readAsDataURL(blob);
-        });
-        img.src = dataUrl;
-        await img.decode();
-        fixed++;
-      } catch (e) {
-        console.warn('ジャケット画像復旧失敗:', img.src, e);
+        for (let attempt = 0; attempt <= RETRY_WAITS.length; attempt++) {
+          if (stopped) return;
+          try {
+            const dataUrl = await withRetrySlot(() => fetchAsDataUrl(url));
+            img.src = dataUrl;
+            await img.decode();
+            fixed++;
+            return;
+          } catch (e) {
+            if (attempt === RETRY_WAITS.length) {
+              failed++;
+              console.warn('ジャケット画像復旧失敗:', original, e);
+              return;
+            }
+            await sleep(RETRY_WAITS[attempt]);
+          }
+        }
       } finally {
         imgDone++;
         render();
       }
     };
 
-    const restoreImages = async () => {
-      let index = 0;
-      const worker = async () => {
-        while (index < images.length && !stopped) {
-          await checkImage(images[index++]);
-        }
-      };
-      await Promise.all(Array.from({ length: IMAGE_CONCURRENCY }, worker));
-    };
-
-    // 画像確認はスコア取得と並行して走らせる
-    const imagesPromise = restoreImages();
+    // 画像の確認はスコア取得と並行して走らせる
+    const imagesPromise = Promise.all(images.map(checkImage));
     imagesPromise.catch(() => {});
 
     const rows = await getRows();
+
+    // --- スコアを Map 化: キー "曲ID-難易度番号" ---
+    const scores = new Map();
+    rows.forEach((row) => {
+      const m = row.id.match(/^(.*)-d(\d+)$/);
+      if (!m) return;
+      const scoreEl = row.querySelector('.td-score .sp-score');
+      if (!scoreEl) return;
+      const n = Number(scoreEl.textContent.replace(/[^\d]/g, ''));
+      if (Number.isFinite(n) && n > 0) scores.set(m[1] + '-' + m[2], n);
+    });
 
     // --- SP/DP の不一致チェック (スコア取得直後に行う) ---
     const rowNums = new Set();
@@ -303,19 +367,11 @@ window.DDRScore = async () => {
       return;
     }
 
-    // 画像の確認が終わるまで待つ (描画位置を確定させるため)
-    await imagesPromise;
+    // スコアの取得は終わったので、裏のスコアページは閉じる
+    // (このページもジャケットを読み込むため、残すとサーバーへの負荷が増える)
+    frame.remove();
 
-    // --- スコアを Map 化: キー "曲ID-難易度番号" ---
-    const scores = new Map();
-    rows.forEach((row) => {
-      const m = row.id.match(/^(.*)-d(\d+)$/);
-      if (!m) return;
-      const scoreEl = row.querySelector('.td-score .sp-score');
-      if (!scoreEl) return;
-      const n = Number(scoreEl.textContent.replace(/[^\d]/g, ''));
-      if (Number.isFinite(n) && n > 0) scores.set(m[1] + '-' + m[2], n);
-    });
+    // ジャケットの枠の大きさは画像の読み込みに左右されないので、待たずに描画する
 
     // --- ジャケットごとにスコアとランクを描画 ---
     let count = 0;
@@ -435,13 +491,28 @@ window.DDRScore = async () => {
 
     // --- 完了表示 ---
     if (scored === 0) {
+      stopped = true;
       show('スコアが1件も表示できませんでした。\nログイン状態とスコア登録を確認してください。', '#ff9800');
-    } else {
+      return;
+    }
+
+    // スコアの表示は完了。ジャケットの読み込みが終わるまで進捗を出す
+    drawn = '① スコア表示: ' + scored + '/' + count + '譜面（未プレー ' + (count - scored) + '）';
+    render();
+    await imagesPromise;
+    if (stopped) return;
+
+    const summary =
+      'スコア表示: ' + scored + '/' + count + '譜面\n未プレー: ' + (count - scored) + '譜面' +
+      (fixed ? '\n画像修復: ' + fixed + '件' : '');
+    if (failed) {
       show(
-        '完了しました\nスコア表示: ' + scored + '/' + count + '譜面\n未プレー: ' + (count - scored) + '譜面' +
-          (fixed ? '\n画像修復: ' + fixed + '件' : ''),
-        '#4caf50'
+        '完了しました(ジャケット ' + failed + ' 枚が読み込めていません)\n' + summary +
+          '\nページを再読み込みして、もう一度実行してください。',
+        '#ff9800'
       );
+    } else {
+      show('完了しました\n' + summary + '\nジャケットも全て読み込み済みです。', '#4caf50');
       setTimeout(() => {
         if (box.isConnected) box.remove();
       }, 15000);
