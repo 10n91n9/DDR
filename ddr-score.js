@@ -11,10 +11,13 @@ window.DDRScore = async () => {
   const STATUS_ID = 'my-ddr-status'; // 進捗バナーの id
   const TOGGLE_ID = 'my-ddr-toggle'; // ランク表示トグルの id
   const STORAGE_KEY = 'ddrRankHidden'; // トグル状態の保存キー
-  const BAND_HEIGHT = 28; // スコア黒帯の高さ(px)
-  const SCORE_FONT_SIZE = 19; // スコア文字サイズ(px)
-  const MIN_FONT_SIZE = 11; // 自動縮小の下限(px)
-  const RANK_FONT_SIZE = 21; // ランク文字サイズ(px)
+  // 以下の寸法は「ジャケット幅が DESIGN_WIDTH (PC の表示) のとき」の値(px)。
+  // 実際の表示では、ジャケット幅に比例して拡大・縮小する(スマホでも PC と同じ見た目の比率になる)。
+  const DESIGN_WIDTH = 88;
+  const BAND_HEIGHT = 28; // スコア黒帯の高さ
+  const SCORE_FONT_SIZE = 19; // スコア文字サイズ
+  const MIN_FONT_SIZE = 11; // 自動縮小の下限
+  const RANK_FONT_SIZE = 21; // ランク文字サイズ
   const IMAGE_WAIT_MS = 120000; // 読み込み中のジャケットを待つ上限(ミリ秒)
   const RETRY_CONCURRENCY = 3; // 読み込みに失敗した画像の再取得の同時数
   const RETRY_WAITS = [1000, 3000, 8000]; // 再取得の間隔(最大3回やり直す)
@@ -389,6 +392,13 @@ window.DDRScore = async () => {
       const imgRect = img.getBoundingClientRect();
       if (!imgRect.width || !imgRect.height) return;
 
+      // ジャケット幅に合わせた拡大率 (PC の表示なら 1)
+      const scale = imgRect.width / DESIGN_WIDTH;
+      const bandH = Math.round(BAND_HEIGHT * scale);
+      const scoreFs = Math.round(SCORE_FONT_SIZE * scale * 10) / 10;
+      const minFs = Math.max(8, Math.round(MIN_FONT_SIZE * scale * 10) / 10);
+      const rankFs = Math.round(RANK_FONT_SIZE * scale * 10) / 10;
+
       jacket.style.position = 'relative';
       const color = n ? scoreColor(n) : '#fff';
 
@@ -399,16 +409,17 @@ window.DDRScore = async () => {
       band.style.cssText = [
         'position:absolute',
         'left:' + (imgRect.left - jacketRect.left) + 'px',
-        'top:' + (imgRect.bottom - jacketRect.top - BAND_HEIGHT) + 'px',
+        'top:' + (imgRect.bottom - jacketRect.top - bandH) + 'px',
         'width:' + imgRect.width + 'px',
-        'height:' + BAND_HEIGHT + 'px',
+        'height:' + bandH + 'px',
         'display:flex', 'align-items:center', 'justify-content:center',
         'box-sizing:border-box', 'padding:0',
         'background:linear-gradient(rgba(0,0,0,.82),rgba(0,0,0,.92))',
         'color:' + color + '!important',
         'font-family:Poppins,"Segoe UI",Arial,sans-serif',
         'font-variant-numeric:tabular-nums',
-        'font-size:' + SCORE_FONT_SIZE + 'px',
+        'font-size:' + scoreFs + 'px',
+        '-webkit-text-size-adjust:none', 'text-size-adjust:none',
         'font-weight:900', 'letter-spacing:-.5px', 'line-height:1',
         'white-space:nowrap',
         'text-shadow:0 0 8px ' + color + '99,1px 1px 0 #000,-1px -1px 0 #000,1px -1px 0 #000,-1px 1px 0 #000',
@@ -418,9 +429,9 @@ window.DDRScore = async () => {
 
       if (n) {
         // 文字が帯からはみ出す場合は少しずつ縮める
-        let fontSize = SCORE_FONT_SIZE;
-        while (band.scrollWidth > band.clientWidth && fontSize > MIN_FONT_SIZE) {
-          fontSize--;
+        let fontSize = scoreFs;
+        while (band.scrollWidth > band.clientWidth && fontSize > minFs) {
+          fontSize -= 0.5;
           band.style.fontSize = fontSize + 'px';
         }
 
@@ -431,11 +442,12 @@ window.DDRScore = async () => {
         rank.textContent = letter;
         rank.style.cssText = [
           'position:absolute',
-          'left:' + (imgRect.left - jacketRect.left + 3) + 'px',
-          'top:' + (imgRect.top - jacketRect.top + 1) + 'px',
+          'left:' + (imgRect.left - jacketRect.left + 3 * scale) + 'px',
+          'top:' + (imgRect.top - jacketRect.top + 1 * scale) + 'px',
           'display:inline-block', 'padding:0 2px 0 0',
           'font-family:Poppins,"Arial Black",Arial,sans-serif',
-          'font-size:' + RANK_FONT_SIZE + 'px',
+          'font-size:' + rankFs + 'px',
+          '-webkit-text-size-adjust:none', 'text-size-adjust:none',
           'font-weight:900', 'font-style:italic', 'line-height:1.1',
           'letter-spacing:-1px', 'white-space:nowrap',
           'color:' + RANK_COLOR[letter] + '!important',
