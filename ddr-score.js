@@ -10,7 +10,10 @@ window.DDRScore = async () => {
   // ------------------------------------------------------------
   const STATUS_ID = 'my-ddr-status'; // 進捗バナーの id
   const TOGGLE_ID = 'my-ddr-toggle'; // ランク表示トグルの id
-  const STORAGE_KEY = 'ddrRankHidden'; // トグル状態の保存キー
+  const STORAGE_KEY = 'ddrRankHidden'; // ランク表示トグルの保存キー
+  const STATS_ID = 'my-ddr-stats'; // 統計パネルの id
+  const STATS_TOGGLE_ID = 'my-ddr-stats-toggle'; // 統計トグルの id
+  const STATS_STORAGE_KEY = 'ddrStatsHidden'; // 統計トグルの保存キー
   // 以下の寸法は「ジャケット幅が DESIGN_WIDTH (PC の表示) のとき」の値(px)。
   // 実際の表示では、ジャケット幅に比例して拡大・縮小する(スマホでも PC と同じ見た目の比率になる)。
   const DESIGN_WIDTH = 88;
@@ -18,6 +21,11 @@ window.DDRScore = async () => {
   const SCORE_FONT_SIZE = 19; // スコア文字サイズ
   const MIN_FONT_SIZE = 11; // 自動縮小の下限
   const RANK_FONT_SIZE = 21; // ランク文字サイズ
+
+  // 統計パネル
+  const TARGET_SCORE = 990000; // 「あと少し」の目標スコア (AAA)
+  const TARGET_LABEL = 'AAA';
+  const NEAR_COUNT = 5; // 「あと少し」の譜面を何件出すか
   const IMAGE_WAIT_MS = 120000; // 読み込み中のジャケットを待つ上限(ミリ秒)
   const RETRY_CONCURRENCY = 3; // 読み込みに失敗した画像の再取得の同時数
   const RETRY_WAITS = [1000, 3000, 8000]; // 再取得の間隔(最大3回やり直す)
@@ -71,10 +79,19 @@ window.DDRScore = async () => {
   // ------------------------------------------------------------
   document.getElementById(STATUS_ID)?.remove();
   document.getElementById(TOGGLE_ID)?.remove();
+  document.getElementById(STATS_ID)?.remove();
+  document.getElementById(STATS_TOGGLE_ID)?.remove();
 
   let showRank = true;
   try {
     showRank = localStorage.getItem(STORAGE_KEY) !== '1';
+  } catch (e) {
+    /* localStorage が使えない環境では常に ON */
+  }
+
+  let showStats = true;
+  try {
+    showStats = localStorage.getItem(STATS_STORAGE_KEY) !== '1';
   } catch (e) {
     /* localStorage が使えない環境では常に ON */
   }
@@ -126,6 +143,144 @@ window.DDRScore = async () => {
     box.style.borderLeftColor = color;
     if (p == null) track.style.display = 'none';
     else bar.style.width = Math.round(p * 240) + 'px';
+  };
+
+  // ------------------------------------------------------------
+  // 統計パネル
+  // ------------------------------------------------------------
+  // 昇順にソート済みの配列から p (0〜1) 番目の値を求める(線形補間)
+  const percentile = (sorted, p) => {
+    const i = (sorted.length - 1) * p;
+    const lo = Math.floor(i);
+    const hi = Math.ceil(i);
+    return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
+  };
+  const fmt = (n) => Math.round(n).toLocaleString('en-US');
+
+  // charts: [{ n: スコア, title: 曲名, level: 難易度(取得できなければ空) }]
+  // total: 難易度表の全譜面数
+  const buildStatsPanel = (charts, total) => {
+    const scores = charts.map((c) => c.n).sort((a, b) => a - b);
+    const played = scores.length;
+    const mean = scores.reduce((a, b) => a + b, 0) / played;
+    const median = percentile(scores, 0.5);
+    const q1 = percentile(scores, 0.25);
+    const q3 = percentile(scores, 0.75);
+    const targetCount = scores.filter((n) => n >= TARGET_SCORE).length;
+
+    // ランク分布 (AAA / AA系 / A系 / B系 / C系 / D系)
+    const dist = {};
+    scores.forEach((n) => {
+      const key = rankOf(n)[1];
+      dist[key] = (dist[key] || 0) + 1;
+    });
+    const families = ['AAA', 'AA', 'A', 'B', 'C', 'D'].filter((k) => dist[k]);
+
+    // 目標まであと少しの譜面
+    const near = charts
+      .filter((c) => c.n < TARGET_SCORE)
+      .sort((a, b) => b.n - a.n)
+      .slice(0, NEAR_COUNT);
+    const hasLevel = near.some((c) => c.level);
+
+    const panel = el(
+      'div',
+      [
+        'position:fixed', 'left:12px', 'bottom:12px', 'z-index:2147483645',
+        'width:min(440px,calc(100vw - 24px))', 'max-height:70vh', 'overflow:auto',
+        'box-sizing:border-box', 'padding:12px 14px', 'border-radius:8px',
+        'background:#1f2029', 'color:#e9e9ee', 'font:13px/1.5 sans-serif',
+        'box-shadow:0 4px 16px rgba(0,0,0,.5)',
+      ].join(';')
+    );
+    panel.id = STATS_ID;
+
+    panel.appendChild(el('div', 'font-weight:700;font-size:14px;margin-bottom:10px', 'スコア統計'));
+
+    // 数値カード
+    const cards = el(
+      'div',
+      'display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:8px;margin-bottom:12px'
+    );
+    const card = (label, value, sub) => {
+      const c = el('div', 'background:#2a2c38;border-radius:8px;padding:8px 10px');
+      c.appendChild(el('div', 'font-size:12px;color:#9a9aa8', label));
+      c.appendChild(el('div', 'font-size:18px;font-weight:700;line-height:1.3', value));
+      if (sub) c.appendChild(el('div', 'font-size:12px;color:#9a9aa8;overflow-wrap:anywhere', sub));
+      cards.appendChild(c);
+    };
+    card('プレー済み', played + ' / ' + total, total ? Math.round((played / total) * 100) + '%' : '');
+    card('平均スコア', fmt(mean), 'プレー済みのみ');
+    card('中央値', fmt(median), '中央50%: ' + fmt(q1) + ' 〜 ' + fmt(q3));
+    card(TARGET_LABEL + ' 達成', String(targetCount), 'プレー済みの ' + Math.round((targetCount / played) * 100) + '%');
+    card('最高スコア', fmt(scores[played - 1]), '最低 ' + fmt(scores[0]));
+    panel.appendChild(cards);
+
+    // ランク分布バー
+    panel.appendChild(el('div', 'font-size:12px;color:#9a9aa8;margin-bottom:4px', 'ランク分布'));
+    const bar = el('div', 'display:flex;height:22px;border-radius:4px;overflow:hidden;margin-bottom:6px');
+    families.forEach((k) => {
+      const pct = (dist[k] / played) * 100;
+      bar.appendChild(
+        el(
+          'div',
+          'display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#1a1a1a;' +
+            'min-width:2px;width:' + pct + '%;background:' + RANK_COLOR[k],
+          pct >= 14 ? k + ' ' + dist[k] : ''
+        )
+      );
+    });
+    panel.appendChild(bar);
+
+    const legend = el('div', 'display:flex;flex-wrap:wrap;gap:2px 12px;font-size:12px;color:#c9c9d3;margin-bottom:12px');
+    families.forEach((k) => {
+      const item = el('span', '');
+      item.appendChild(el('span', 'display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:4px;background:' + RANK_COLOR[k]));
+      item.appendChild(document.createTextNode((k === 'AAA' ? 'AAA' : k + '系') + ' ' + dist[k]));
+      legend.appendChild(item);
+    });
+    panel.appendChild(legend);
+
+    // 目標まであと少しの譜面
+    panel.appendChild(
+      el('div', 'font-size:12px;color:#9a9aa8;margin-bottom:4px', TARGET_LABEL + ' まであと少し（上位' + NEAR_COUNT + '譜面）')
+    );
+    if (!near.length) {
+      panel.appendChild(el('div', 'color:#c9c9d3', '全てのプレー済み譜面が ' + TARGET_LABEL + ' 以上です'));
+    } else {
+      const table = el('table', 'width:100%;border-collapse:collapse;font-size:13px');
+      const addRow = (cells, header) => {
+        const tr = document.createElement('tr');
+        cells.forEach((c, i) => {
+          const td = el(
+            header ? 'th' : 'td',
+            'padding:4px 6px;border-bottom:1px solid #3a3c4a;font-weight:' + (header ? 400 : 400) +
+              ';color:' + (header ? '#9a9aa8' : c.color || '#e9e9ee') +
+              ';text-align:' + (c.right ? 'right' : 'left') +
+              (c.title ? ';max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap' : ''),
+            c.text
+          );
+          if (c.title) td.title = c.text;
+          tr.appendChild(td);
+        });
+        table.appendChild(tr);
+      };
+      const head = [{ text: '曲名' }];
+      if (hasLevel) head.push({ text: '難易度', right: true });
+      head.push({ text: 'スコア', right: true }, { text: TARGET_LABEL + ' まで', right: true });
+      addRow(head, true);
+      near.forEach((c) => {
+        const cells = [{ text: c.title || '(曲名不明)', title: true }];
+        if (hasLevel) cells.push({ text: c.level, right: true });
+        cells.push(
+          { text: fmt(c.n), right: true },
+          { text: 'あと ' + fmt(TARGET_SCORE - c.n), right: true, color: '#FFA273' }
+        );
+        addRow(cells, false);
+      });
+      panel.appendChild(table);
+    }
+    return panel;
   };
 
   // ------------------------------------------------------------
@@ -379,6 +534,15 @@ window.DDRScore = async () => {
     // --- ジャケットごとにスコアとランクを描画 ---
     let count = 0;
     let scored = 0;
+    const charts = [];
+
+    // その譜面の難易度(15.55 など)。行の先頭セルから取れなければ空にする
+    const levelOf = (jacket) => {
+      const row = jacket.closest('tr');
+      const first = row && row.firstElementChild;
+      const text = first ? first.textContent.trim() : '';
+      return /^\d+(\.\d+)?$/.test(text) ? text : '';
+    };
 
     document.querySelectorAll('.div-jacket[id^="div-jacket-"]').forEach((jacket) => {
       const m = jacket.id.match(/^div-jacket-(.*)-(\d+)$/);
@@ -466,7 +630,10 @@ window.DDRScore = async () => {
       }
 
       count++;
-      if (n) scored++;
+      if (n) {
+        scored++;
+        charts.push({ n, title: img.getAttribute('title') || '', level: levelOf(jacket) });
+      }
     });
 
     // --- ランク表示のトグルボタン ---
@@ -500,6 +667,39 @@ window.DDRScore = async () => {
 
     document.body.appendChild(toggle);
     applyRankVisibility();
+
+    // --- 統計パネルと、その表示トグル ---
+    if (charts.length) {
+      const statsPanel = buildStatsPanel(charts, count);
+      const statsToggle = el(
+        'button',
+        [
+          'position:fixed', 'bottom:56px', 'right:16px', 'z-index:2147483646',
+          'padding:9px 16px', 'border:1px solid #4da3ff', 'border-radius:20px',
+          'background:#1f2029', 'color:#fff', 'font:700 13px/1 sans-serif',
+          'cursor:pointer', 'box-shadow:0 2px 10px rgba(0,0,0,.5)',
+        ].join(';')
+      );
+      statsToggle.id = STATS_TOGGLE_ID;
+
+      const applyStatsVisibility = () => {
+        statsPanel.style.display = showStats ? 'block' : 'none';
+        statsToggle.textContent = '統計: ' + (showStats ? 'ON' : 'OFF');
+      };
+      statsToggle.onclick = () => {
+        showStats = !showStats;
+        try {
+          localStorage.setItem(STATS_STORAGE_KEY, showStats ? '0' : '1');
+        } catch (e) {
+          /* 保存できなくても動作には影響しない */
+        }
+        applyStatsVisibility();
+      };
+
+      document.body.appendChild(statsPanel);
+      document.body.appendChild(statsToggle);
+      applyStatsVisibility();
+    }
 
     // --- 完了表示 ---
     if (scored === 0) {
