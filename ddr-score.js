@@ -26,6 +26,9 @@ window.DDRScore = async () => {
   const TARGET_SCORE = 990000; // 「あと少し」の目標スコア (AAA)
   const TARGET_LABEL = 'AAA';
   const NEAR_COUNT = 5; // 「あと少し」の譜面を何件出すか
+
+  // スマホでは、ジャケットがサイト側で拡大して表示される。バナーやパネルも同じ割合で拡大する(上限)
+  const UI_SCALE_MAX = 2.2;
   const IMAGE_WAIT_MS = 120000; // 読み込み中のジャケットを待つ上限(ミリ秒)
   const RETRY_CONCURRENCY = 3; // 読み込みに失敗した画像の再取得の同時数
   const RETRY_WAITS = [1000, 3000, 8000]; // 再取得の間隔(最大3回やり直す)
@@ -97,6 +100,21 @@ window.DDRScore = async () => {
   }
 
   // ------------------------------------------------------------
+  // 画面の拡大率 (バナー・パネル・ボタンの大きさ)
+  // ------------------------------------------------------------
+  // スマホではページ全体が縮小して表示され、固定サイズ(px)のバナーなどが小さく見える。
+  // サイト側で拡大されているジャケットの幅から割合を求め、同じだけ拡大する。PC では 1。
+  const uiScale = (() => {
+    const sample = document.querySelector('.div-jacket img.img-jacket');
+    const width = sample ? sample.getBoundingClientRect().width : 0;
+    if (!width) return 1;
+    return Math.min(UI_SCALE_MAX, Math.max(1, Math.round((width / DESIGN_WIDTH) * 100) / 100));
+  })();
+  // zoom を掛けた要素の中では長さが拡大されるので、画面幅・高さに収まる上限を拡大率で割っておく
+  const uiMaxWidth = Math.floor((window.innerWidth - 24) / uiScale);
+  const uiMaxHeight = Math.floor((window.innerHeight * 0.7) / uiScale);
+
+  // ------------------------------------------------------------
   // 進捗バナー
   // ------------------------------------------------------------
   const el = (tag, css, text) => {
@@ -110,7 +128,7 @@ window.DDRScore = async () => {
     'div',
     [
       'position:fixed', 'top:12px', 'right:12px', 'z-index:2147483647',
-      'width:300px', 'max-width:calc(100vw - 24px)', 'box-sizing:border-box',
+      'width:' + Math.min(300, uiMaxWidth) + 'px', 'zoom:' + uiScale, 'box-sizing:border-box',
       'padding:12px 28px 12px 14px', 'border-radius:8px',
       'background:#1f2029', 'color:#fff', 'font:13px/1.6 sans-serif',
       'box-shadow:0 4px 16px rgba(0,0,0,.5)', 'border-left:4px solid #4da3ff',
@@ -187,7 +205,8 @@ window.DDRScore = async () => {
       'div',
       [
         'position:fixed', 'left:12px', 'bottom:12px', 'z-index:2147483645',
-        'width:min(440px,calc(100vw - 24px))', 'max-height:70vh', 'overflow:auto',
+        'width:' + Math.min(440, uiMaxWidth) + 'px', 'max-height:' + uiMaxHeight + 'px', 'overflow:auto',
+        'zoom:' + uiScale,
         'box-sizing:border-box', 'padding:12px 14px', 'border-radius:8px',
         'background:#1f2029', 'color:#e9e9ee', 'font:13px/1.5 sans-serif',
         'box-shadow:0 4px 16px rgba(0,0,0,.5)',
@@ -640,7 +659,7 @@ window.DDRScore = async () => {
     const toggle = el(
       'button',
       [
-        'position:fixed', 'bottom:16px', 'right:16px', 'z-index:2147483646',
+        'position:fixed', 'bottom:16px', 'right:16px', 'z-index:2147483646', 'zoom:' + uiScale,
         'padding:9px 16px', 'border:1px solid #4da3ff', 'border-radius:20px',
         'background:#1f2029', 'color:#fff', 'font:700 13px/1 sans-serif',
         'cursor:pointer', 'box-shadow:0 2px 10px rgba(0,0,0,.5)',
@@ -674,7 +693,7 @@ window.DDRScore = async () => {
       const statsToggle = el(
         'button',
         [
-          'position:fixed', 'bottom:56px', 'right:16px', 'z-index:2147483646',
+          'position:fixed', 'bottom:56px', 'right:16px', 'z-index:2147483646', 'zoom:' + uiScale,
           'padding:9px 16px', 'border:1px solid #4da3ff', 'border-radius:20px',
           'background:#1f2029', 'color:#fff', 'font:700 13px/1 sans-serif',
           'cursor:pointer', 'box-shadow:0 2px 10px rgba(0,0,0,.5)',
